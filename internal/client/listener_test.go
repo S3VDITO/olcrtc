@@ -206,7 +206,7 @@ func TestSocks5RejectsEmptyDomain(t *testing.T) {
 	c := &Client{}
 	result := make(chan error, 1)
 	go func() {
-		_, _, err := c.socks5Request(remote)
+		_, err := c.socks5Request(remote)
 		result <- err
 	}()
 

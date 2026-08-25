@@ -48,6 +48,7 @@ type Settings struct {
 	Liveness  Liveness  `yaml:"liveness"`
 	Lifecycle Lifecycle `yaml:"lifecycle"`
 	Traffic   Traffic   `yaml:"traffic"`
+	UDP       UDP       `yaml:"udp"`
 }
 
 // File is the on-disk YAML schema.
@@ -175,6 +176,12 @@ type Traffic struct {
 	MaxPayloadSize int    `yaml:"max_payload_size"`
 	MinDelay       string `yaml:"min_delay"`
 	MaxDelay       string `yaml:"max_delay"`
+}
+
+// UDP controls the lossy SOCKS5 UDP ASSOCIATE relay.
+type UDP struct {
+	Disabled *bool `yaml:"disabled"`
+	MaxFlows *int  `yaml:"max_flows"`
 }
 
 // Gen controls room-generation mode.
@@ -334,6 +341,12 @@ func ApplySettings(dst session.Config, s Settings) session.Config {
 	dst.TrafficMinDelay = overlay(dst.TrafficMinDelay, s.Traffic.MinDelay)
 	dst.TrafficMaxDelay = overlay(dst.TrafficMaxDelay, s.Traffic.MaxDelay)
 
+	if s.UDP.Disabled != nil {
+		dst.UDPDisabled = dst.UDPDisabled || *s.UDP.Disabled
+	}
+	if s.UDP.MaxFlows != nil {
+		dst.UDPMaxFlows = overlay(dst.UDPMaxFlows, *s.UDP.MaxFlows)
+	}
 	return dst
 }
 

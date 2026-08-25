@@ -51,10 +51,14 @@ const (
 
 // Client handles local SOCKS5 connections and tunnels them to the server.
 type Client struct {
-	ln          transport.Transport
-	keys        *crypto.KeySet
-	pair        *tunnelcore.SessionPair
-	conn        *muxconn.Conn
+	ln   transport.Transport
+	keys *crypto.KeySet
+	pair *tunnelcore.SessionPair
+	conn *muxconn.Conn
+	// controlConn is a separate muxconn wired to the transport's control-plane
+	// channel (transport.ControlPlane). When non-nil, the smux control session
+	// runs over it instead of the bulk data conn, eliminating head-of-line
+	// blocking of control ping/pong behind large data transfers.
 	controlConn *muxconn.Conn
 	session     *smux.Session
 	controlSess *smux.Session
@@ -81,6 +85,11 @@ type Client struct {
 	livenessFallback time.Duration
 	shutdownGrace    time.Duration
 	fallbackPending  atomic.Bool
+	udpMu            sync.Mutex
+	udpFlows         map[uint64]clientUDPFlow
+	udpFlowIndex     map[clientUDPFlowKey]uint64
+	udpDisabled      bool
+	maxUDPFlows      int
 }
 
 // HealthFunc is called when the client control health snapshot changes.
@@ -109,6 +118,8 @@ type Config struct {
 	DeviceIDPath     string
 	Claims           map[string]any
 	OnHealth         HealthFunc
+	UDPDisabled      bool
+	UDPMaxFlows      int
 }
 
 // Run starts the client with the given configuration.
@@ -140,6 +151,10 @@ func RunWithAddress(ctx context.Context, cfg Config, onReady func(actualAddr str
 		keys: keys, deviceID: deviceID, claims: cfg.Claims, dnsServer: cfg.DNSServer,
 		socksUser: cfg.SOCKSUser, socksPass: cfg.SOCKSPass,
 		health: runtime.NewHealthTracker(cfg.OnHealth), sessionReady: make(chan struct{}),
+		udpFlows:     make(map[uint64]clientUDPFlow),
+		udpFlowIndex: make(map[clientUDPFlowKey]uint64),
+		udpDisabled:  cfg.UDPDisabled,
+		maxUDPFlows:  normalizeMaxUDPFlows(cfg.UDPMaxFlows),
 	}
 	defer func() {
 		cancel()

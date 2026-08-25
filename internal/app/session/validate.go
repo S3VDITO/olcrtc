@@ -42,6 +42,7 @@ func Validate(cfg Config) error {
 		validateTransportConfig,
 		validateLivenessConfig,
 		validateLifecycleConfig,
+		validateUDPConfig,
 		validateTrafficConfig,
 		validateModeConfig,
 	}
@@ -49,6 +50,14 @@ func Validate(cfg Config) error {
 		if err := check(cfg); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// ai-generated: udp.max_flows validation ported from PR #122.
+func validateUDPConfig(cfg Config) error {
+	if cfg.UDPMaxFlows < 0 {
+		return ErrUDPMaxFlowsInvalid
 	}
 	return nil
 }

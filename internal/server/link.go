@@ -21,6 +21,7 @@ func (s *Server) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
 		Options: cfg.TransportOptions, Traffic: cfg.Traffic,
 	}, tunnelcore.LinkRoleConfig{
 		OnData: s.onData, OnPeerData: s.onPeerData, Resolver: s.resolver,
+		OnDatagram: s.onDatagram, OnPeerDatagram: s.onPeerDatagram,
 		ProxyAddr: s.socksProxyAddr, ProxyPort: s.socksProxyPort,
 	})
 	ln, err := transport.New(ctx, cfg.Transport, linkCfg)

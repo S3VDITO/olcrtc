@@ -88,6 +88,8 @@ var (
 		"invalid liveness failures (set liveness.failures to a value > 0)")
 	ErrLifecycleMaxSessionDurationInvalid = errors.New(
 		"invalid max session duration (set lifecycle.max_session_duration to a duration > 0)")
+	// ErrUDPMaxFlowsInvalid indicates that udp.max_flows is negative.
+	ErrUDPMaxFlowsInvalid           = errors.New("invalid udp max flows (set udp.max_flows to 0 or a positive value)")
 	ErrTrafficMaxPayloadSizeInvalid = errors.New(
 		"invalid traffic max payload size (set traffic.max_payload_size to 0 or a value above crypto overhead)")
 	ErrTrafficMinDelayInvalid = errors.New(
@@ -153,6 +155,8 @@ type Config struct {
 	LivenessTimeout       string
 	LivenessFailures      int
 	MaxSessionDuration    string
+	UDPDisabled           bool
+	UDPMaxFlows           int
 	TrafficMaxPayloadSize int
 	TrafficMinDelay       string
 	TrafficMaxDelay       string

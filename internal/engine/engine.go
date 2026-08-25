@@ -23,7 +23,20 @@ var (
 	ErrEngineNotFound = errors.New("engine not found")
 	// ErrInvalidPeerID is returned when an authenticated routing peer ID is malformed.
 	ErrInvalidPeerID = errors.New("invalid peer id")
+	// ErrByteStreamUnsupported is returned when an engine cannot expose a byte stream.
+	ErrByteStreamUnsupported = errors.New("engine does not support byte stream")
+	// ErrVideoTrackUnsupported is returned when an engine cannot exchange video tracks.
+	ErrVideoTrackUnsupported = errors.New("engine does not support video tracks")
+	// ErrDatagramUnsupported is returned when an engine cannot exchange lossy datagrams.
+	ErrDatagramUnsupported = errors.New("engine does not support datagrams")
 )
+
+// Capabilities describes the transport primitives an engine can expose.
+type Capabilities struct {
+	ByteStream bool
+	VideoTrack bool
+	Datagram   bool
+}
 
 // Credentials are produced by an auth provider - duplicated here to avoid an
 // import cycle between engine and auth.
@@ -49,10 +62,14 @@ type Config struct {
 	Extra      map[string]string
 	OnData     func([]byte)
 	OnPeerData func(peerID string, data []byte)
-	DNSServer  string
-	Resolver   *net.Resolver
-	ProxyAddr  string
-	ProxyPort  int
+	// OnDatagram receives unordered/lossy datagram payloads. Unlike OnData,
+	// these payloads are not fed through smux and may be dropped by the carrier.
+	OnDatagram     func([]byte)
+	OnPeerDatagram func(peerID string, data []byte)
+	DNSServer      string
+	Resolver       *net.Resolver
+	ProxyAddr      string
+	ProxyPort      int
 	// RequireTargetedPeer asks engines that multiplex room-wide messages to
 	// ignore single-peer broadcast frames until the remote has addressed this
 	// session's local epoch.
@@ -90,6 +107,19 @@ type Session interface {
 // specific remote endpoint and report the sender endpoint on receive.
 type PeerSession interface {
 	SendTo(peerID string, data []byte) error
+}
+
+// DatagramSession is implemented by engines that can send unordered/lossy
+// datagrams independently of the reliable byte stream.
+type DatagramSession interface {
+	SendDatagram(data []byte) error
+	DatagramCanSend() bool
+}
+
+// PeerDatagramSession is implemented by engines that can address lossy
+// datagrams to a specific remote endpoint.
+type PeerDatagramSession interface {
+	SendDatagramTo(peerID string, data []byte) error
 }
 
 // PeerReadySession is implemented by engines that can signal when a remote

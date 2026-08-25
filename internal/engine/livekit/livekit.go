@@ -26,8 +26,11 @@ import (
 
 const (
 	dataPublishTopic = "olcrtc"
-	videoTrackName   = "videochannel"
-	maxReconnects    = 10
+	// datagramPublishTopic carries lossy unordered datagrams on a dedicated
+	// topic so the byte-stream path never mixes with the datagram plane.
+	datagramPublishTopic = "olcrtc.udp"
+	videoTrackName       = "videochannel"
+	maxReconnects        = 10
 
 	// leaveGrace is how long disconnect() lets the SFU act on our
 	// LEAVE_REQUEST before returning. See sdkRoom.disconnect.
@@ -55,6 +58,7 @@ var (
 
 type roomHandle interface {
 	publishData(data []byte) error
+	publishDatagram(data []byte, peerID string) error
 	publishTrack(track webrtc.TrackLocal) error
 	unpublishLocalTracks()
 	disconnect()
@@ -72,6 +76,20 @@ func (r *sdkRoom) publishData(data []byte) error {
 		lksdk.WithDataPublishReliable(true),
 	); err != nil {
 		return fmt.Errorf("publish data packet: %w", err)
+	}
+	return nil
+}
+
+func (r *sdkRoom) publishDatagram(data []byte, peerID string) error {
+	opts := []lksdk.DataPublishOption{
+		lksdk.WithDataPublishTopic(datagramPublishTopic),
+		lksdk.WithDataPublishReliable(false),
+	}
+	if peerID != "" {
+		opts = append(opts, lksdk.WithDataPublishDestination([]string{peerID}))
+	}
+	if err := r.room.LocalParticipant.PublishDataPacket(lksdk.UserData(data), opts...); err != nil {
+		return fmt.Errorf("publish datagram packet: %w", err)
 	}
 	return nil
 }
@@ -152,21 +170,23 @@ type Session struct {
 	engine.Reconnector
 	engine.VideoTrackState
 
-	url          string
-	token        string
-	name         string
-	refresh      func(ctx context.Context) (engine.Credentials, error)
-	connectRoom  connectRoomFunc
-	connectOpts  []lksdk.ConnectOption
-	room         roomHandle
-	roomMu       sync.RWMutex
-	onData       func([]byte)
-	closeCh      chan struct{}
-	sendQueue    chan []byte
-	closed       atomic.Bool
-	reconnecting atomic.Bool
-	done         chan struct{}
-	queuedBytes  atomic.Int64
+	url            string
+	token          string
+	name           string
+	refresh        func(ctx context.Context) (engine.Credentials, error)
+	connectRoom    connectRoomFunc
+	connectOpts    []lksdk.ConnectOption
+	room           roomHandle
+	roomMu         sync.RWMutex
+	onData         func([]byte)
+	onDatagram     func([]byte)
+	onPeerDatagram func(peerID string, data []byte)
+	closeCh        chan struct{}
+	sendQueue      chan []byte
+	closed         atomic.Bool
+	reconnecting   atomic.Bool
+	done           chan struct{}
+	queuedBytes    atomic.Int64
 	// roomReady overrides roomReadyTimeout. Zero means the default; only
 	// tests set it.
 	roomReady      time.Duration
@@ -204,16 +224,18 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 		connectOpts = append(connectOpts, lksdk.WithSettingEngineFunc(applySettings))
 	}
 	s := &Session{
-		url:         cfg.URL,
-		token:       cfg.Token,
-		name:        cfg.Name,
-		refresh:     cfg.Refresh,
-		connectRoom: connectSDKRoom,
-		connectOpts: connectOpts,
-		onData:      cfg.OnData,
-		closeCh:     make(chan struct{}),
-		sendQueue:   make(chan []byte, engine.DefaultSendQueueSize),
-		done:        make(chan struct{}),
+		url:            cfg.URL,
+		token:          cfg.Token,
+		name:           cfg.Name,
+		refresh:        cfg.Refresh,
+		connectRoom:    connectSDKRoom,
+		connectOpts:    connectOpts,
+		onData:         cfg.OnData,
+		onDatagram:     cfg.OnDatagram,
+		onPeerDatagram: cfg.OnPeerDatagram,
+		closeCh:        make(chan struct{}),
+		sendQueue:      make(chan []byte, engine.DefaultSendQueueSize),
+		done:           make(chan struct{}),
 	}
 	s.Configure(engine.ReconnectorConfig{
 		MaxAttempts: maxReconnects,
@@ -225,6 +247,11 @@ func New(_ context.Context, cfg engine.Config) (engine.Session, error) {
 		LimitReason: "reconnect limit reached",
 	})
 	return s, nil
+}
+
+// Capabilities reports what this engine can do.
+func (s *Session) Capabilities() engine.Capabilities {
+	return engine.Capabilities{ByteStream: true, VideoTrack: true, Datagram: true}
 }
 
 // Connect joins the LiveKit room.
@@ -240,10 +267,8 @@ func (s *Session) Connect(ctx context.Context) error {
 func (s *Session) connectSession(_ context.Context) error {
 	roomCB := &lksdk.RoomCallback{
 		ParticipantCallback: lksdk.ParticipantCallback{
-			OnDataReceived: func(data []byte, _ lksdk.DataReceiveParams) {
-				if s.onData != nil {
-					s.onData(data)
-				}
+			OnDataReceived: func(data []byte, params lksdk.DataReceiveParams) {
+				s.handleDataReceived(data, params)
 			},
 			OnTrackSubscribed: func(track *webrtc.TrackRemote, _ *lksdk.RemoteTrackPublication, _ *lksdk.RemoteParticipant) {
 				if track.Kind() != webrtc.RTPCodecTypeVideo {
@@ -272,6 +297,21 @@ func (s *Session) connectSession(_ context.Context) error {
 
 	s.setRoom(room)
 	return s.publishPendingTracks()
+}
+
+func (s *Session) handleDataReceived(data []byte, params lksdk.DataReceiveParams) {
+	if params.Topic == datagramPublishTopic {
+		switch {
+		case s.onPeerDatagram != nil && params.SenderIdentity != "":
+			s.onPeerDatagram(params.SenderIdentity, data)
+		case s.onDatagram != nil:
+			s.onDatagram(data)
+		}
+		return
+	}
+	if s.onData != nil {
+		s.onData(data)
+	}
 }
 
 func (s *Session) publishPendingTracks() error {
@@ -364,6 +404,31 @@ func (s *Session) Send(data []byte) error {
 	default:
 		return ErrSendQueueFull
 	}
+}
+
+// SendDatagram publishes one unordered/lossy data packet.
+func (s *Session) SendDatagram(data []byte) error {
+	return s.SendDatagramTo("", data)
+}
+
+// SendDatagramTo publishes one unordered/lossy data packet to a specific participant.
+func (s *Session) SendDatagramTo(peerID string, data []byte) error {
+	if s.closed.Load() {
+		return ErrSessionClosed
+	}
+	room := s.currentRoom()
+	if room == nil || room.connectionState() != lksdk.ConnectionStateConnected {
+		return ErrRoomNotConnected
+	}
+	if err := room.publishDatagram(data, peerID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DatagramCanSend reports whether the lossy data channel is writable.
+func (s *Session) DatagramCanSend() bool {
+	return s.CanSend()
 }
 
 // Close terminates the session.

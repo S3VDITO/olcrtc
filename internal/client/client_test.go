@@ -252,18 +252,11 @@ func TestSocks5RequestIPv4(t *testing.T) {
 		_ = client.Close()
 	}()
 
-	done := make(chan struct {
-		addr string
-		port int
-		err  error
-	}, 1)
+	done := make(chan socksRequest, 1)
 	go func() {
-		addr, port, err := c.socks5Request(server)
-		done <- struct {
-			addr string
-			port int
-			err  error
-		}{addr: addr, port: port, err: err}
+		req, err := c.socks5Request(server)
+		_ = err
+		done <- req
 	}()
 
 	req := []byte{5, 1, 0, 1, 127, 0, 0, 1}
@@ -274,9 +267,6 @@ func TestSocks5RequestIPv4(t *testing.T) {
 	}
 
 	res := <-done
-	if res.err != nil {
-		t.Fatalf("socks5Request() error = %v", res.err)
-	}
 	if res.addr != "127.0.0.1" || res.port != 8080 {
 		t.Fatalf("socks5Request() = (%q, %d), want (127.0.0.1, 8080)", res.addr, res.port)
 	}
@@ -290,18 +280,11 @@ func TestSocks5RequestDomain(t *testing.T) {
 		_ = client.Close()
 	}()
 
-	done := make(chan struct {
-		addr string
-		port int
-		err  error
-	}, 1)
+	done := make(chan socksRequest, 1)
 	go func() {
-		addr, port, err := c.socks5Request(server)
-		done <- struct {
-			addr string
-			port int
-			err  error
-		}{addr: addr, port: port, err: err}
+		req, err := c.socks5Request(server)
+		_ = err
+		done <- req
 	}()
 
 	req := make([]byte, 0, 16)
@@ -314,9 +297,6 @@ func TestSocks5RequestDomain(t *testing.T) {
 	}
 
 	res := <-done
-	if res.err != nil {
-		t.Fatalf("socks5Request() error = %v", res.err)
-	}
 	if res.addr != "example.com" || res.port != 443 {
 		t.Fatalf("socks5Request() = (%q, %d), want (example.com, 443)", res.addr, res.port)
 	}
@@ -332,7 +312,7 @@ func TestSocks5RequestRejectsCommandAndAddressType(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := c.socks5Request(server)
+		_, err := c.socks5Request(server)
 		done <- err
 	}()
 
@@ -352,7 +332,7 @@ func TestSocks5RequestRejectsCommandAndAddressType(t *testing.T) {
 
 	done = make(chan error, 1)
 	go func() {
-		_, _, err := c.socks5Request(server2)
+		_, err := c.socks5Request(server2)
 		done <- err
 	}()
 
@@ -375,7 +355,7 @@ func TestSocks5RequestReadPortError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := c.socks5Request(server)
+		_, err := c.socks5Request(server)
 		done <- err
 	}()
 
@@ -799,8 +779,8 @@ func TestSocks5RequestIPv6(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		addr, port, err := c.socks5Request(server)
-		done <- result{addr: addr, port: port, err: err}
+		req, err := c.socks5Request(server)
+		done <- result{addr: req.addr, port: req.port, err: err}
 	}()
 
 	req := make([]byte, 0, 4+net.IPv6len+2)

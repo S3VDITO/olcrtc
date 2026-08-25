@@ -32,6 +32,9 @@ var ErrPeerIdentityUnsupported = errors.New("peer identity unsupported")
 // ErrInvalidPeerID is returned when an authenticated routing peer ID is malformed.
 var ErrInvalidPeerID = errors.New("invalid peer id")
 
+// ErrDatagramUnsupported is returned when a transport cannot send lossy datagrams.
+var ErrDatagramUnsupported = errors.New("transport does not support datagrams")
+
 // Features describes the delivery semantics of a transport.
 //
 // It used to also advertise Reliable/Ordered/MessageOriented. All four
@@ -42,6 +45,9 @@ var ErrInvalidPeerID = errors.New("invalid peer id")
 // upper layers actually size their frames against (see runtime.MaxPayload).
 type Features struct {
 	MaxPayloadSize int
+	// Datagram reports whether the transport additionally exposes a lossy
+	// unordered datagram plane (see DatagramTransport).
+	Datagram bool
 }
 
 // Transport defines a byte transport independent of the underlying provider.
@@ -85,6 +91,21 @@ type PeerTransport interface {
 	Transport
 	SendTo(peerID string, data []byte) error
 	SupportsPeerRouting() bool
+}
+
+// DatagramTransport is implemented by transports that can send unordered/lossy
+// datagrams independently of the reliable byte stream.
+type DatagramTransport interface {
+	Transport
+	SendDatagram(data []byte) error
+	DatagramCanSend() bool
+}
+
+// PeerDatagramTransport is implemented by datagram transports that can address
+// individual remote endpoints.
+type PeerDatagramTransport interface {
+	DatagramTransport
+	SendDatagramTo(peerID string, data []byte) error
 }
 
 // PeerControlPlane is implemented by transports that support per-peer isolated
@@ -201,10 +222,14 @@ type Config struct {
 	Name          string
 	OnData        func([]byte)
 	OnPeerData    func(peerID string, data []byte)
-	DNSServer     string
-	Resolver      *net.Resolver
-	ProxyAddr     string
-	ProxyPort     int
+	// OnDatagram receives lossy unordered datagrams from the datagram plane.
+	// nil disables the datagram plane.
+	OnDatagram     func([]byte)
+	OnPeerDatagram func(peerID string, data []byte)
+	DNSServer      string
+	Resolver       *net.Resolver
+	ProxyAddr      string
+	ProxyPort      int
 
 	// RequireTargetedPeer makes single-peer engines ignore broadcast frames
 	// from unrelated olcrtc clients until a peer sends a frame addressed to

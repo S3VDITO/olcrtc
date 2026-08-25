@@ -58,7 +58,13 @@ type Server struct {
 	controlStop context.CancelFunc
 	sessMu      sync.RWMutex
 
-	peerSessions map[string]*peerSession
+	udpMu                        sync.Mutex
+	udpFlows                     map[serverUDPKey]*serverUDPFlow
+	udpPendingFlows              int
+	unsafeAllowPrivateUDPTargets bool
+	udpDisabled                  bool
+	maxUDPFlows                  int
+	peerSessions                 map[string]*peerSession
 	// peerLimitWarn rate-limits the peer-cap warning.
 	peerLimitWarn atomic.Int64
 	peersMu       sync.Mutex
@@ -110,6 +116,12 @@ type Config struct {
 	OnSessionClose   SessionCloseFunc
 	OnTraffic        TrafficFunc
 	OnHealth         HealthFunc
+	UDPDisabled      bool
+	UDPMaxFlows      int
+	// UnsafeAllowPrivateUDPTargets permits UDP relay targets in loopback,
+	// private, link-local and multicast ranges. Leave false outside local
+	// tests/dev setups; enabling it can expose local-network SSRF.
+	UnsafeAllowPrivateUDPTargets bool
 }
 
 // Run starts the server with the given configuration.
@@ -143,7 +155,10 @@ func Run(ctx context.Context, cfg Config) error {
 		socksProxyUser: cfg.SOCKSProxyUser, socksProxyPass: cfg.SOCKSProxyPass,
 		liveness: cfg.Liveness, health: runtime.NewHealthTracker(cfg.OnHealth),
 		peerSessions: make(map[string]*peerSession), peerStats: make(map[string]peerStat),
-		done: make(chan struct{}),
+		udpFlows: make(map[serverUDPKey]*serverUDPFlow), udpDisabled: cfg.UDPDisabled,
+		maxUDPFlows:                  normalizeMaxUDPFlows(cfg.UDPMaxFlows),
+		unsafeAllowPrivateUDPTargets: cfg.UnsafeAllowPrivateUDPTargets,
+		done:                         make(chan struct{}),
 	}
 	defer func() {
 		s.shutdown()

@@ -26,6 +26,8 @@ type LinkRoleConfig struct {
 	DeviceID            string
 	OnData              func([]byte)
 	OnPeerData          func(string, []byte)
+	OnDatagram          func([]byte) // ai-generated: datagram callbacks ported from PR #122
+	OnPeerDatagram      func(string, []byte)
 	Resolver            *net.Resolver
 	ProxyAddr           string
 	ProxyPort           int
@@ -46,6 +48,8 @@ func BuildTransportConfig(base LinkConfig, role LinkRoleConfig) transport.Config
 		Name:                names.Generate(),
 		OnData:              role.OnData,
 		OnPeerData:          role.OnPeerData,
+		OnDatagram:          role.OnDatagram,
+		OnPeerDatagram:      role.OnPeerDatagram,
 		DNSServer:           base.DNSServer,
 		Resolver:            Resolver(role.Resolver, base.DNSServer),
 		ProxyAddr:           role.ProxyAddr,
