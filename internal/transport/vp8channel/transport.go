@@ -84,6 +84,8 @@ var (
 	ErrVideoTrackUnsupported = common.ErrVideoTrackUnsupported
 	// ErrTransportClosed is returned when operations are attempted on a closed transport.
 	ErrTransportClosed = errors.New("vp8channel transport closed")
+	// ErrDatagramQueueFull reports a full lossy datagram queue.
+	ErrDatagramQueueFull = errors.New("vp8channel datagram queue full")
 )
 
 // videoSession is the provider contract vp8channel needs. The control plane
@@ -109,6 +111,10 @@ type streamTransport struct {
 	sampleWriter func([]byte) bool
 	onData       func([]byte)
 	onPeerData   func(peerID string, data []byte)
+	// datagram plane: lossy unordered frames carried as OLUD-marked samples
+	// alongside the reliable KCP streams.
+	onDatagram     func([]byte)
+	onPeerDatagram func(peerID string, data []byte)
 	// serverMode records which side of the link this is. The multi-peer
 	// (server) side keeps one session per remote epoch; the single-peer
 	// (client) side latches onto exactly one. Routing decisions read this
@@ -159,6 +165,9 @@ type streamTransport struct {
 	// shaper applies the optional traffic policy to the bulk data path only;
 	// the control plane must stay unpaced.
 	shaper *transport.Shaper
+
+	// datagramOutbound carries raw datagram frames ready for the writer.
+	datagramOutbound chan []byte
 
 	// peers holds one session per remote epoch in server mode. Each session
 	// owns an isolated bulk KCP plus, once the peer starts handshaking, its
@@ -222,7 +231,10 @@ func newStreamTransport(
 		track:            track,
 		onData:           cfg.OnData,
 		onPeerData:       cfg.OnPeerData,
+		onDatagram:       cfg.OnDatagram,
+		onPeerDatagram:   cfg.OnPeerDatagram,
 		serverMode:       cfg.OnPeerData != nil,
+		datagramOutbound: make(chan []byte, datagramOutboundQueueSize),
 		closeCh:          make(chan struct{}),
 		writerDone:       make(chan struct{}),
 		frameInterval:    time.Second / time.Duration(opts.FPS),
@@ -374,6 +386,9 @@ func (p *streamTransport) Close() error {
 		p.data.close()
 		p.control.close()
 		p.peers.closeAll()
+		// ai-generated: purge queued datagrams so a stale frame cannot leak
+		// into the next epoch after rotation (pr #122).
+		p.drainDatagramOutbound()
 
 		if p.writerUp.Load() {
 			<-p.writerDone
@@ -456,5 +471,70 @@ func (p *streamTransport) CanSend() bool {
 
 // Features describes the current vp8channel transport semantics.
 func (p *streamTransport) Features() transport.Features {
-	return p.shaper.Features(transport.Features{MaxPayloadSize: defaultMaxPayloadSize})
+	return p.shaper.Features(transport.Features{MaxPayloadSize: defaultMaxPayloadSize, Datagram: true})
+}
+
+// SendDatagram sends one unordered/lossy frame over the VP8 carrier.
+// ai-generated: ported from PR #122, adapted to the kcpPlane layout.
+func (p *streamTransport) SendDatagram(data []byte) error {
+	dst := p.peerEpoch.Load()
+	return p.enqueueDatagram(dst, data)
+}
+
+// SendDatagramTo sends one unordered/lossy frame to a specific peer epoch.
+func (p *streamTransport) SendDatagramTo(peerID string, data []byte) error {
+	epoch, err := parsePeerID(peerID)
+	if err != nil {
+		return fmt.Errorf("vp8channel: invalid peerID %q: %w", peerID, err)
+	}
+	return p.enqueueDatagram(epoch, data)
+}
+
+func (p *streamTransport) enqueueDatagram(dst uint32, data []byte) error {
+	if p.closed.Load() {
+		return ErrTransportClosed
+	}
+	if len(data)+epochHdrLen+len(datagramMagic) > defaultMaxPayloadSize {
+		return transport.ErrTrafficPayloadTooLarge
+	}
+	frame := p.buildDatagramFrame(dst, data)
+	select {
+	case p.datagramOutbound <- frame:
+		return nil
+	default:
+		return ErrDatagramQueueFull
+	}
+}
+
+func (p *streamTransport) buildDatagramFrame(dst uint32, data []byte) []byte {
+	hdr := buildEpochHeaderTo(p.bindingToken, p.localEpochValue(), dst)
+	frame := make([]byte, 0, epochHdrLen+len(datagramMagic)+len(data))
+	frame = append(frame, hdr[:]...)
+	frame = append(frame, datagramMagic[:]...)
+	frame = append(frame, data...)
+	return frame
+}
+
+// drainDatagramOutbound discards queued datagrams after close so a stale
+// frame cannot be flushed into a rotated epoch.
+func (p *streamTransport) drainDatagramOutbound() {
+	for {
+		select {
+		case <-p.datagramOutbound:
+		default:
+			return
+		}
+	}
+}
+
+// DatagramCanSend reports whether the lossy datagram queue can accept data.
+// Unlike CanSend it does not gate on the engine readiness flag: datagram
+// frames are written through the same sample writer the control plane uses,
+// which queues until the room is ready, so an engine that is momentarily
+// flagging not-ready must not stall UDP forever.
+func (p *streamTransport) DatagramCanSend() bool {
+	if p.closed.Load() {
+		return false
+	}
+	return len(p.datagramOutbound) < cap(p.datagramOutbound)*canSendHighWatermark/100
 }

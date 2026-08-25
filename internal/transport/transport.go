@@ -254,6 +254,8 @@ func (c Config) EngineConfig() enginebuiltin.Config {
 		Name:                c.Name,
 		OnData:              c.OnData,
 		OnPeerData:          c.OnPeerData,
+		OnDatagram:          c.OnDatagram,
+		OnPeerDatagram:      c.OnPeerDatagram,
 		DNSServer:           c.DNSServer,
 		Resolver:            c.Resolver,
 		ProxyAddr:           c.ProxyAddr,

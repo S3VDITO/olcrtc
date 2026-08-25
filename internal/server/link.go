@@ -231,6 +231,9 @@ func (s *Server) swapSession(dead *smux.Session, replacement *tunnelcore.Session
 	oldControlStop := s.controlStop
 	oldSessionID := s.sessionID
 	s.installPairLocked(replacement)
+	// ai-generated: udp flows do not survive a session swap, close them
+	// (ported from pr #122 swapSession).
+	s.closeAllUDPFlows()
 	s.controlStrm = nil
 	s.controlStop = nil
 	s.sessionID = ""
@@ -293,6 +296,8 @@ func (s *Server) closeSession() {
 	s.controlStrm, s.controlStop = nil, nil
 	s.sessionID, s.deviceID = "", ""
 	s.sessMu.Unlock()
+	// ai-generated: close udp relay flows on session teardown (pr #122).
+	s.closeAllUDPFlows()
 	s.state.broadcast()
 	if controlStop != nil {
 		controlStop()

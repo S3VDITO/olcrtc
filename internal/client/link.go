@@ -24,6 +24,7 @@ func (c *Client) bringUpLink(ctx context.Context, cfg Config, cancel context.Can
 		Options: cfg.TransportOptions, Traffic: cfg.Traffic,
 	}, tunnelcore.LinkRoleConfig{
 		DeviceID: c.deviceID, OnData: c.onData, Resolver: cfg.Resolver,
+		OnDatagram:          c.onDatagram, // ai-generated: udp reply path ported from pr #122
 		RequireTargetedPeer: true,
 	})
 	link, err := transport.New(ctx, cfg.Transport, linkCfg)

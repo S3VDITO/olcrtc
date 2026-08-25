@@ -37,6 +37,8 @@ const (
 	dstOff      = 28
 	crcOff      = 32
 	epochHdrLen = 36
+	// datagramOutboundQueueSize bounds the lossy datagram queue.
+	datagramOutboundQueueSize = 4096
 	// controlEpochFlag marks an epoch as belonging to the control-plane
 	// KCP session. The high bit of the epoch uint32 is reserved for this
 	// purpose; data-plane epochs are generated with the high bit clear.

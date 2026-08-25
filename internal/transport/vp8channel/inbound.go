@@ -34,6 +34,10 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 		p.handleControlFrame(src, dst, kcpPayload)
 		return
 	}
+	if payload, ok := splitDatagramPayload(kcpPayload); ok {
+		p.handleDatagramFrame(src, payload)
+		return
+	}
 
 	if p.serverMode {
 		p.handlePeerFrame(src, kcpPayload)
@@ -41,6 +45,39 @@ func (p *streamTransport) handleIncomingFrame(frame []byte) {
 	}
 
 	p.handleSinglePeerData(src, kcpPayload)
+}
+
+// datagramMagic marks lossy datagram frames inside the epoch envelope.
+var datagramMagic = [4]byte{'O', 'L', 'U', 'D'} //nolint:gochecknoglobals // wire marker
+
+func splitDatagramPayload(payload []byte) ([]byte, bool) {
+	if len(payload) < len(datagramMagic) ||
+		string(payload[:len(datagramMagic)]) != string(datagramMagic[:]) {
+		return nil, false
+	}
+	return payload[len(datagramMagic):], true
+}
+
+// handleDatagramFrame delivers one lossy datagram. ai-generated: adapted from
+// PR #122 to the serverMode/onPeerData layout.
+func (p *streamTransport) handleDatagramFrame(src uint32, payload []byte) {
+	if p.serverMode {
+		if p.onPeerDatagram != nil {
+			p.onPeerDatagram(formatPeerID(src), payload)
+		}
+		return
+	}
+	if !p.peerConfirmed.Load() {
+		return
+	}
+	if src != p.peerEpoch.Load() {
+		p.maybePeerRestart(src)
+		return
+	}
+	p.lastPeerFrameNano.Store(time.Now().UnixNano())
+	if p.onDatagram != nil {
+		p.onDatagram(payload)
+	}
 }
 
 // acceptsDst reports whether a frame addressed to dst is for us. dst==0 is a

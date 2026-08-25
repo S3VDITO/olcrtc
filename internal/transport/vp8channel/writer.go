@@ -20,6 +20,32 @@ type writerState struct {
 	pendingControl *packetBuffer
 	pendingData    *packetBuffer
 	batchBuf       []byte
+	// pendingDatagram holds a lossy datagram frame that failed WriteSample
+	// and must be retried before any newer frame is sent.
+	pendingDatagram []byte
+}
+
+// drainDatagram sends queued lossy datagrams after control frames and before
+// reliable KCP data. Returns false when a frame must be retried on the next tick.
+func (w *writerState) drainDatagram() bool {
+	if w.pendingDatagram != nil {
+		if !w.writeSample(w.pendingDatagram) {
+			return false
+		}
+		w.pendingDatagram = nil
+	}
+	for {
+		select {
+		case frame := <-w.p.datagramOutbound:
+			w.idleTicks = 0
+			if !w.writeSample(frame) {
+				w.pendingDatagram = frame
+				return false
+			}
+		default:
+			return true
+		}
+	}
 }
 
 func (w *writerState) releasePending() {
@@ -156,6 +182,10 @@ func (p *streamTransport) writerLoop() {
 			// Priority 1+2: drain all control frames before any bulk data.
 			if !w.drainControl() {
 				continue // a control frame is still failing; retry next tick
+			}
+			// Priority 2.5: lossy datagrams before reliable bulk data.
+			if !w.drainDatagram() {
+				continue
 			}
 			// Priority 3: drain a batched data frame (or send keepalive).
 			w.drainData()
